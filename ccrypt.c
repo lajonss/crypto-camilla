@@ -8,6 +8,8 @@
 
 #include <openssl/camellia.h>
 
+#define BLOCK_SIZE 16
+
 #define ECB_MODE 1
 #define CBC_MODE 2
 
@@ -36,8 +38,8 @@ void do_encrypt() {
   printf("Set key: %d\n", Camellia_set_key(pass, 128, &key));
   FILE *file_in = fopen(input, "rb");
   FILE *file_out = fopen(output, "wb");
-  unsigned char bufor_in[8];
-  unsigned char bufor_out[8];
+  unsigned char bufor_in[BLOCK_SIZE];
+  unsigned char bufor_out[BLOCK_SIZE];
 
   int operation_mode;
   if(decrypt)
@@ -51,17 +53,26 @@ void do_encrypt() {
     int work = 1;
     while(work) {
       //printf("Filename: %s", input);
-      size_t rd = fread(bufor_in, sizeof(char), 8, file_in);
-      printf("ferror: %d\n", ferror(file_in));
-      printf("feof: %d\n", feof(file_in));
-      printf("reading: %zd\n", rd);
-      for(size_t i = 8; i > rd; i--) {
+      size_t rd = fread(bufor_in, sizeof(char), BLOCK_SIZE, file_in);
+      if(ferror(file_in)) {
+          printf("Reading error");
+          exit(-1);
+      }
+      //printf("ferror: %d\n", ferror(file_in));
+      //printf("feof: %d\n", feof(file_in));
+      //printf("reading: %zd\n", rd);
+      for(size_t i = BLOCK_SIZE; i > rd; i--) {
         if(i-1 == 0)
           break;
         bufor_in[i-1] = rd;
         work = 0;
       }
       Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
+      fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
+      if(ferror(file_out)) {
+          printf("Writing error");
+          exit(-1);
+      }
       //printf("writing: %zd\n", fwrite(bufor_out, sizeof(char), 8, file_out));
     }
   } else {
