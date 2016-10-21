@@ -1,10 +1,9 @@
 #define _GNU_SOURCE
 
+#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <getopt.h>
-
 
 #include <openssl/camellia.h>
 
@@ -21,8 +20,8 @@ static char *output = 0;
 static char *input = 0;
 
 int invalid_usage(char *reason, char *argument) {
-  if(reason) {
-    if(argument)
+  if (reason) {
+    if (argument)
       printf("%s: %s\n", reason, argument);
     else
       printf("Invalid usage: %s\n", reason);
@@ -31,52 +30,73 @@ int invalid_usage(char *reason, char *argument) {
   return -1;
 }
 
-
 void do_encrypt() {
-  unsigned const char pass[16] = { 'a', 'b', 'd', 'e', 'f', 'x', 'd', 'd', 'a', 'b', 'd', 'e', 'f', 'x', 'd', 'd'};
+  unsigned const char pass[16] = {'a', 'b', 'd', 'e', 'f', 'x', 'd', 'd',
+                                  'a', 'b', 'd', 'e', 'f', 'x', 'd', 'd'};
   CAMELLIA_KEY key;
-  printf("Set key: %d\n", Camellia_set_key(pass, 128, &key));
+  Camellia_set_key(pass, 128, &key);
   FILE *file_in = fopen(input, "rb");
+  if (!file_in) {
+    printf("Failed to open input file: %s\n", input);
+    exit(-1);
+  }
   FILE *file_out = fopen(output, "wb");
+  if (!file_out) {
+    printf("Failed to open output file: %s\n", output);
+    exit(-1);
+  }
   unsigned char bufor_in[BLOCK_SIZE];
   unsigned char bufor_out[BLOCK_SIZE];
+  unsigned char ivec[BLOCK_SIZE];
+  memset(ivec, 0, BLOCK_SIZE);
 
   int operation_mode;
-  if(decrypt)
+  if (decrypt)
     operation_mode = CAMELLIA_DECRYPT;
   else
     operation_mode = CAMELLIA_ENCRYPT;
 
-  printf("operation_mode: %d\n", operation_mode);
-
-  if (working_mode == ECB_MODE) {
-    int work = 1;
-    while(work) {
-      //printf("Filename: %s", input);
-      size_t rd = fread(bufor_in, sizeof(char), BLOCK_SIZE, file_in);
-      if(ferror(file_in)) {
-          printf("Reading error");
-          exit(-1);
-      }
-      //printf("ferror: %d\n", ferror(file_in));
-      //printf("feof: %d\n", feof(file_in));
-      //printf("reading: %zd\n", rd);
-      for(size_t i = BLOCK_SIZE; i > rd; i--) {
-        if(i-1 == 0)
-          break;
-        bufor_in[i-1] = rd;
-        work = 0;
-      }
-      Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
-      fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
-      if(ferror(file_out)) {
-          printf("Writing error");
-          exit(-1);
-      }
-      //printf("writing: %zd\n", fwrite(bufor_out, sizeof(char), 8, file_out));
+  size_t rd;
+  int bufor_out_ready = 0;
+  while ((rd = fread(bufor_in, sizeof(char), BLOCK_SIZE, file_in))) {
+    if (ferror(file_in)) {
+      printf("Reading error\n");
+      exit(-1);
     }
-  } else {
-    printf("unsigned\n");
+    if (operation_mode == CAMELLIA_DECRYPT && bufor_out_ready)
+      fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
+    if (rd < BLOCK_SIZE) {
+      printf("filling: %zd\n", BLOCK_SIZE - rd);
+      for (size_t i = BLOCK_SIZE; i > rd; i--)
+        bufor_in[i - 1] = BLOCK_SIZE - rd;
+    }
+    if (working_mode == ECB_MODE)
+      Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
+    else
+      Camellia_cbc_encrypt(bufor_in, bufor_out, BLOCK_SIZE, &key, ivec,
+                           operation_mode);
+    bufor_out_ready = 1;
+    if (operation_mode == CAMELLIA_ENCRYPT)
+      fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
+    if (ferror(file_out)) {
+      printf("Writing error\n");
+      exit(-1);
+    }
+    if (rd < BLOCK_SIZE)
+      break;
+  }
+  if (operation_mode == CAMELLIA_DECRYPT) {
+    fwrite(bufor_out, sizeof(char), BLOCK_SIZE - bufor_out[BLOCK_SIZE - 1],
+           file_out);
+    printf("decrypt fill: %d\n", bufor_out[BLOCK_SIZE - 1]);
+  } else if (!rd) {
+    memset(bufor_in, BLOCK_SIZE, BLOCK_SIZE);
+    if (working_mode == ECB_MODE)
+      Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
+    else
+      Camellia_cbc_encrypt(bufor_in, bufor_out, BLOCK_SIZE, &key, ivec,
+                           operation_mode);
+    fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
   }
 
   fclose(file_in);
@@ -84,57 +104,51 @@ void do_encrypt() {
   printf("done\n");
 }
 
-void do_decrypt() {
-  printf("Unsupported\n");
-}
-
 int main(int argc, char **argv) {
   int c;
   program_name = argv[0];
 
   while (1) {
-    //int this_option_optind = optind ? optind : 1;
     int option_index = 0;
     static struct option long_options[] = {
-      {   "mode", required_argument, 0, 'm'},
-      { "output", required_argument, 0, 'o'},
-      {   "help",       no_argument, 0, 'h'},
-      {"decrypt",       no_argument, 0, 'd'},
-      {        0,                 0, 0,   0}
-    };
+        {"mode", required_argument, 0, 'm'},
+        {"output", required_argument, 0, 'o'},
+        {"help", no_argument, 0, 'h'},
+        {"decrypt", no_argument, 0, 'd'},
+        {0, 0, 0, 0}};
     c = getopt_long(argc, argv, "dm:o:h?", long_options, &option_index);
     if (c == -1)
       break;
     switch (c) {
-      case 'm':
-        if(optarg[0] == 'c' || optarg[0] == 'C')
-          working_mode = CBC_MODE;
-        else if(optarg[0] == 'e' || optarg[0] == 'E')
-          working_mode = ECB_MODE;
-        else
-          return invalid_usage("Unsupported mode", optarg);
-        break;
-      case 'o':
-        output = optarg;
-        break;
-      case 'd':
-        decrypt = 1;
-        break;
-      case 'h':
-      case '?':
-        return invalid_usage(0, 0);
-      default:
-        printf("?? getopt returned character code 0%o ??\n", c);
+    case 'm':
+      if (optarg[0] == 'c' || optarg[0] == 'C')
+        working_mode = CBC_MODE;
+      else if (optarg[0] == 'e' || optarg[0] == 'E')
+        working_mode = ECB_MODE;
+      else
+        return invalid_usage("Unsupported mode", optarg);
+      break;
+    case 'o':
+      output = optarg;
+      break;
+    case 'd':
+      decrypt = 1;
+      break;
+    case 'h':
+    case '?':
+      return invalid_usage(0, 0);
+    default:
+      printf("?? getopt returned character code 0%o ??\n", c);
     }
   }
-  if(!working_mode)
+  if (!working_mode)
     return invalid_usage("Mode parameter is required!", 0);
-  if(optind >= argc)
+  if (optind >= argc)
     return invalid_usage("Input file name is required!", 0);
-  input = (char*) malloc(strlen(argv[optind]) + 1);
+  input = (char *)malloc(strlen(argv[optind]) + 1);
   strcpy(input, argv[optind]);
-  if(!output) {
-    output = (char*) malloc(strlen(input) + 5);
+  if (!output) {
+    output = (char *)malloc(strlen(input) + 5);
     strcpy(output, input);
     strcat(output, ".out");
   }
