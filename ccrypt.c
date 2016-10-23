@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
+#include <time.h>
 
 #include <openssl/camellia.h>
 
@@ -18,6 +20,21 @@ static int working_mode = 0;
 static int decrypt = 0;
 static char *output = 0;
 static char *input = 0;
+static uint64_t total_time = 0; 
+static struct timespec start, end;
+
+
+// http://stackoverflow.com/a/10192994
+void start_measure_time() {
+  clock_gettime(CLOCK_MONOTONIC_RAW, &start);
+}
+
+uint64_t stop_measure_time() {
+  clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+  uint64_t delta_us = (end.tv_sec - start.tv_sec) * 1000000 + (end.tv_nsec - start.tv_nsec) / 1000;
+  return delta_us;
+}
+
 
 int invalid_usage(char *reason, char *argument) {
   if (reason) {
@@ -70,11 +87,17 @@ void do_encrypt() {
       for (size_t i = BLOCK_SIZE; i > rd; i--)
         bufor_in[i - 1] = BLOCK_SIZE - rd;
     }
-    if (working_mode == ECB_MODE)
+    if (working_mode == ECB_MODE) {
+      start_measure_time();
       Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
-    else
+      total_time += stop_measure_time();
+    }
+    else {
+      start_measure_time();
       Camellia_cbc_encrypt(bufor_in, bufor_out, BLOCK_SIZE, &key, ivec,
                            operation_mode);
+      total_time += stop_measure_time();
+    }
     bufor_out_ready = 1;
     if (operation_mode == CAMELLIA_ENCRYPT)
       fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
@@ -90,12 +113,19 @@ void do_encrypt() {
            file_out);
     printf("decrypt fill: %d\n", bufor_out[BLOCK_SIZE - 1]);
   } else if (!rd) {
+    // Pawle, zakomentowanie tego bloku kodu nie zaburza dzialania programu, sprawdz :)
     memset(bufor_in, BLOCK_SIZE, BLOCK_SIZE);
-    if (working_mode == ECB_MODE)
+    if (working_mode == ECB_MODE) {
+      start_measure_time();
       Camellia_ecb_encrypt(bufor_in, bufor_out, &key, operation_mode);
-    else
+      total_time += stop_measure_time();
+    }
+    else {
+      start_measure_time();
       Camellia_cbc_encrypt(bufor_in, bufor_out, BLOCK_SIZE, &key, ivec,
                            operation_mode);
+      total_time += stop_measure_time();
+    }
     fwrite(bufor_out, sizeof(char), BLOCK_SIZE, file_out);
   }
 
@@ -154,5 +184,6 @@ int main(int argc, char **argv) {
   }
   printf("%s -> %s\n", input, output);
   do_encrypt();
+  printf("It took %" PRIu64 " microseconds\n", total_time);
   return 0;
 }
